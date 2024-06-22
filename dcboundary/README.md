@@ -1,0 +1,1 @@
+Primitive tool for finding boundaries in files, printing them in a dcsplit yaml friendly format to aid setting up new files for decompilation. (written in Rust for learning/practicing)
