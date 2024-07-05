@@ -474,6 +474,19 @@ def func_search(addr, seg_end):
         if max_data_end == 0:
             late_data = True
         
+        if is_nop_padding(max_end + 2 + key, max_end + 2):
+            max_end += 2
+            while is_nop_padding(max_end + key, max_end):
+                max_end += 2
+            while max_end + key in data_long_addresses or max_end + key in data_short_addresses:
+                if (max_end + key) in data_long_addresses:
+                    max_end += 4
+                else:
+                    max_end += 2
+            while is_nop_padding(max_end + key, max_end):
+                max_end += 2
+            return max_end
+        
         return max_end + 2 # then we just return the end of the code
 
     # if its not a nop, neither a data from our func 
