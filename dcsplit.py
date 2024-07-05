@@ -19,6 +19,8 @@ with open(sys.argv[1], 'r') as file:
 with open(dcsplit_config['target_path'], 'rb') as file:
     filecontent = bytearray(file.read())
 
+align_ranges = {}
+late_label = set()
 labelled_addresses = set()
 label_names = {}
 need_export = set()
@@ -70,13 +72,14 @@ key = dcsplit_config['key']
 big_endian_nop_padding = 'big_endian_nop_padding' in dcsplit_config
 
 if 'symbol_addrs_path' in dcsplit_config:
-    with open(dcsplit_config['symbol_addrs_path'], 'r') as symbols_file:
-        symbols_lines = symbols_file.readlines()
-        for line in symbols_lines:
-            spl = line.split("=")
-            symbol_name = spl[0].strip()
-            symbol_addr = spl[1].strip()[:-1]
-            add_label(int(symbol_addr, 16), "_" + symbol_name)
+    for symbol_path in dcsplit_config['symbol_addrs_path']:
+        with open(symbol_path, 'r') as symbols_file:
+            symbols_lines = symbols_file.readlines()
+            for line in symbols_lines:
+                spl = line.split("=")
+                symbol_name = spl[0].strip()
+                symbol_addr = spl[1].strip()[:-1]
+                add_label(int(symbol_addr, 16), "_" + symbol_name)
 
 writeBss = 0
 
@@ -122,13 +125,20 @@ def disasm_iter(seg_start, seg_end, offset, address, size, callback):
     start = address
     end = address + size
     while address < end:
-        
-        code = struct.unpack("H", filecontent[(offset + (address-start)) : (offset + (address-start)) + 2])
+        file_offset = offset + address - start
+
+        code = struct.unpack("H", filecontent[file_offset : file_offset + 2])
         insn = sh4.decode(code[0], address)
         
         if insn is not None:
-            callback(seg_start, seg_end, address, offset + address - start, insn, code[0])
-        address += 2
+            callback(seg_start, seg_end, address, file_offset, insn, code[0])
+            
+        if file_offset in align_ranges:
+            align_size = align_ranges[file_offset] - file_offset
+            #address += align_size
+            address += 2
+        else:
+            address += 2
 
 # helps converting the operands of an instruction to valid asm
 def oper2str(insn, oper):
@@ -300,6 +310,14 @@ def disassemble_callback(seg_start, seg_end, address, offset, insn, bytes):
     if check_invalid_data_address(address):
         return
 
+    if False and offset in align_ranges:
+        if raw != 0:
+            write_asm_file_output("\t.ALIGN 32")
+        return
+
+    if offset in late_label:
+        write_asm_file_output("late_%s:" % addr_to_label_noh(address))
+
     if len(insn.operands) > 0 and insn.operands[0][0] == sh4.OPER_TYPE.ADDRESS:
         addr = insn.operands[0][1]
         if addr in labelled_addresses and (addr < seg_start or addr >= seg_end):
@@ -352,13 +370,16 @@ def blacklist_label_callback(seg_start, seg_end, address, offset, insn, bytes):
         usedLabels.add(address)
 
 max_end = 0
+min_data_end = 0
 max_data_end = 0
 late_data = False
 is_short_data = False
 is_data = set()
+per_func_is_data = set()
 import_data = set()
 visited = set()
 functions_done = set()
+
 
 def find_func_end(address, seg_end):
     if address > seg_end:
@@ -367,11 +388,13 @@ def find_func_end(address, seg_end):
         return
     visited.add(address)
     while True:
-        
         insn = get_instruction_at(address + key, address)
         
         global max_end
+        global min_data_end
         global max_data_end
+        global is_short_data
+        global per_func_is_data
 
         result = insn.op.name.lower()
         if result in {"rts", "jmp"}:
@@ -381,8 +404,13 @@ def find_func_end(address, seg_end):
 
         if insn.op == sh4.OP.MOV or insn.op == sh4.OP.MOVA:
             if insn.operands[0][0] == sh4.OPER_TYPE.ADDRESS:
+                per_func_is_data.add(insn.operands[0][1] - key)
                 is_data.add(insn.operands[0][1] - key)
                 import_data.add(insn.operands[0][1] - key)
+
+                if insn.operands[0][1] - key < min_data_end:
+                    min_data_end = insn.operands[0][1] - key
+
                 if insn.operands[0][1] - key > max_data_end:
                     max_data_end = insn.operands[0][1] - key
                     is_short_data = insn.length_suffix != sh4.SUFFIX.L and insn.op != sh4.OP.MOVA
@@ -405,17 +433,20 @@ def func_search(addr, seg_end):
     # i'm guessing this global thing is a terrible idea, but i don't know python for shit
     global max_end
     global max_data_end
+    global min_data_end
     global visited
     global is_data
     global late_data
+    global align_ranges
+    global per_func_is_data
 
     # init
     late_data = False
     max_end = 0
+    min_data_end = len(filecontent)
     max_data_end = 0
     visited = set()
-    is_data = set()
-    import_data = set()
+    per_func_is_data = set()
 
     functions_done.add(addr)
 
@@ -440,6 +471,9 @@ def func_search(addr, seg_end):
 
     # if there's no data used by the function or there was only data inbetween the function, but not after it
     if max_data_end == 0 or max_data_end < max_end:
+        if max_data_end == 0:
+            late_data = True
+        
         return max_end + 2 # then we just return the end of the code
 
     # if its not a nop, neither a data from our func 
@@ -452,14 +486,36 @@ def func_search(addr, seg_end):
     # we jump over the last data we found
     # and then skip past the nops
     data_section = max_data_end + (2 if is_short_data else 4)
+
+    while data_section in is_data:
+        if (data_section + key) in data_long_addresses:
+            data_section += 4
+        else:
+            data_section += 2
+        
+    start_align = data_section
+
+    find_start = min_data_end
+    while (find_start in data_long_addresses or find_start in data_short_addresses) or (find_start - 2 in data_long_addresses or find_start - 2 in data_short_addresses):
+        if find_start - 4 in data_long_addresses:
+            find_start -= 4
+        else:
+            find_start -= 2
+
+    if find_start + 2 in data_short_addresses or find_start + 2 in data_long_addresses:
+        min_data_end = find_start + 2
+
     maybe_nop = is_nop_padding(data_section + key, data_section)
     while(maybe_nop):
         data_section = data_section + 2
         maybe_nop = is_nop_padding(data_section + key, data_section)
 
-    if get_short_at(data_section) == 0 and (seg_end - data_section) < 32:
-        while get_short_at(data_section) == 0:
+    if (seg_end - data_section) < 32:
+        while get_short_at(data_section)[0] == 0:
             data_section += 2
+
+    if data_section - start_align > 0:
+        align_ranges[start_align] = data_section
 
     return data_section
 
@@ -698,6 +754,7 @@ for i in range(len(segs)):
                     for line in lines:
                         if "#include" in line: continue
                         if "INLINE_ASM" in line: continue
+                        if "MERGE" in line: continue
                         if line.strip() == "": continue
 
                         c_file_exists = True
@@ -720,16 +777,33 @@ for i in range(len(segs)):
 
             all_intervals.append([start, end, dir + subseg_name])    
 
+            is_data = set()
+
             func = subseg_start
             while func < subseg_end:    
                 end_func = func_search(func, subseg_end)
                 
+                # finding external labels, write them up for merging incase its decompiled
+                merge_list = []
+                if late_data:
+                    for x in per_func_is_data:
+                        if x > end_func:
+                            raw = struct.unpack("H", filecontent[x : x + 2])[0]
+                            integer = struct.unpack("I", filecontent[x : x + 4])[0]
+    
+                            if x + key in data_long_addresses:
+                                merge_list.append([addr_to_label_noh(integer), addr_to_label_noh(x + key)])
+                            else:
+                                merge_list.append([addr_to_label_noh(integer), raw])
+
                 func_va = (func + key)
                 func_name = ("_func_%08X" % func_va) if func_va not in label_names else label_names[func_va]
 
                 write_c_file("INLINE_ASM(%s, \"%s\");" % (func_name, dcsplit_config['nonmatchings_path'] + "/" + dir + subseg_name + "/" + func_name + ".src") + os.linesep)
-                #if late_data:
-                    #write_c_file("")
+
+                if len(merge_list) > 0:
+                    write_c_file("// MERGE_LIST(%s);" % merge_list)
+
 
                 if end_func > subseg_end:
                     end_func = subseg_end
