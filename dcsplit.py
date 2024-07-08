@@ -812,7 +812,7 @@ for i in range(len(segs)):
                 func_va = (func + key)
                 func_name = ("_func_%08X" % func_va) if func_va not in label_names else label_names[func_va]
 
-                write_c_file("INLINE_ASM(%s, \"%s\");" % (func_name, dcsplit_config['nonmatchings_path'] + "/" + dir + subseg_name + "/" + func_name + ".src") + os.linesep)
+                write_c_file("INLINE_ASM(%s, 0x%x, \"%s\");" % (func_name, end_func - func, dcsplit_config['nonmatchings_path'] + "/" + dir + subseg_name + "/" + func_name + ".src") + os.linesep)
 
                 if len(merge_list) > 0:
                     write_c_file("// MERGE_LIST(%s);" % merge_list)
