@@ -843,15 +843,18 @@ for i in range(len(segs)):
     )
 
 def create_lnk_sub():
+    # shc tools hate msys2 python's os.linesep
+    our_sep = '\n'
+
     lnk = open(dcsplit_config['linker_path'], "w")
-    lnk.write("align_section" + os.linesep)
-    lnk.write("elf" + os.linesep)
-    lnk.write(("output %s" % ".\\" + dcsplit_config['elf_path'].replace("/", "\\")) + os.linesep)
-    lnk.write("nolibrary" + os.linesep)
+    lnk.write("align_section" + our_sep)
+    lnk.write("elf" + our_sep)
+    lnk.write(("output %s" % ".\\" + dcsplit_config['elf_path'].replace("/", "\\")) + our_sep)
+    lnk.write("nolibrary" + our_sep)
     
     if 'additional_linker' in dcsplit_config:
         for file in dcsplit_config['additional_linker']:
-            lnk.write(file + os.linesep)
+            lnk.write(file + our_sep)
 
     sorted_files = sorted(all_intervals, key=lambda x: x[0])
     
@@ -860,17 +863,17 @@ def create_lnk_sub():
         if file[2] in use_c_files:
             build_path = ".\\%s\\%s\\" % (dcsplit_config['build_path'], dcsplit_config['src_path'])
         if file[2] in has_rodata:
-            lnk.write("input " + build_path + file[2].replace("/", "\\") + "_rodata.obj" + os.linesep)    
+            lnk.write("input " + build_path + file[2].replace("/", "\\") + "_rodata.obj" + our_sep)    
         if file[2] in has_data:
-            lnk.write("input " + build_path + file[2].replace("/", "\\") + "_data.obj" + os.linesep)    
-        lnk.write("input " + build_path + file[2].replace("/", "\\") + ".obj" + os.linesep)
+            lnk.write("input " + build_path + file[2].replace("/", "\\") + "_data.obj" + our_sep)    
+        lnk.write("input " + build_path + file[2].replace("/", "\\") + ".obj" + our_sep)
 
-    lnk.write(("print %s" % ".\\" + dcsplit_config['map_path'].replace("/", "\\")) + os.linesep)
-    lnk.write("entry " + dcsplit_config['entry'] + os.linesep)
-    lnk.write("form a" + os.linesep)
-    lnk.write("debug" + os.linesep)
-    lnk.write(("start %s(%08X)" % (dcsplit_config['section_order'], dcsplit_config['key'])) + os.linesep)
-    lnk.write("exit" + os.linesep)
+    lnk.write(("print %s" % ".\\" + dcsplit_config['map_path'].replace("/", "\\")) + our_sep)
+    lnk.write("entry " + dcsplit_config['entry'] + our_sep)
+    lnk.write("form a" + our_sep)
+    lnk.write("debug" + our_sep)
+    lnk.write(("start %s(%08X)" % (dcsplit_config['section_order'], dcsplit_config['key'])) + our_sep)
+    lnk.write("exit" + our_sep)
     lnk.close()
 
 create_lnk_sub()
